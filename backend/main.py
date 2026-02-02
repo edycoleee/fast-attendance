@@ -1,92 +1,81 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from typing import List
-from datetime import datetime
+"""
+RSUD Sulfat Attendance System API
+FastAPI application with Clean Architecture
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import backend.models as models
-import backend.schemas as schemas
-from backend.database import engine, get_db
+from config.settings import settings
+from config.database import Base, engine
+from api.v1.router import api_router
+from utils.middleware import RequestLoggingMiddleware
+from utils.exception_handlers import (
+    http_exception_handler,
+    validation_exception_handler,
+    general_exception_handler
+)
+from utils.logger import logger
 
-# Create database tables
-models.Base.metadata.create_all(bind=engine)
+# Create database tables (if using SQLAlchemy models)
+# Base.metadata.create_all(bind=engine)
 
+# Initialize FastAPI app
 app = FastAPI(
-    title="RSUD Sulfat Attendance System", 
-    version="2.0.0",
-    description="Sistem Attendance RSUD Sulfat - PostgreSQL"
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description=settings.APP_DESCRIPTION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
-# ============================================================
-# LOKASI ENDPOINTS
-# ============================================================
+# Add exception handlers
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
-@app.post("/lokasi/", response_model=schemas.Lokasi, status_code=status.HTTP_201_CREATED, tags=["Lokasi"])
-def create_lokasi(lokasi: schemas.LokasiCreate, db: Session = Depends(get_db)):
-    """Create new lokasi"""
-    db_lokasi = models.Lokasi(**lokasi.model_dump())
-    db.add(db_lokasi)
-    db.commit()
-    db.refresh(db_lokasi)
-    return db_lokasi
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
 
-@app.get("/lokasi/", response_model=List[schemas.Lokasi], tags=["Lokasi"])
-def get_all_lokasi(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Get all lokasi"""
-    lokasi = db.query(models.Lokasi).offset(skip).limit(limit).all()
-    return lokasi
+# Include API v1 router
+app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
-
-@app.get("/lokasi/{id_lokasi}", response_model=schemas.Lokasi, tags=["Lokasi"])
-def get_lokasi_by_id(id_lokasi: int, db: Session = Depends(get_db)):
-    """Get lokasi by ID"""
-    lokasi = db.query(models.Lokasi).filter(models.Lokasi.id_lokasi == id_lokasi).first()
-    if lokasi is None:
-        raise HTTPException(status_code=404, detail="Lokasi not found")
-    return lokasi
-
-
-@app.put("/lokasi/{id_lokasi}", response_model=schemas.Lokasi, tags=["Lokasi"])
-def update_lokasi(
-    id_lokasi: int, 
-    lokasi_update: schemas.LokasiUpdate, 
-    db: Session = Depends(get_db)
-):
-    """Update lokasi"""
-    db_lokasi = db.query(models.Lokasi).filter(models.Lokasi.id_lokasi == id_lokasi).first()
-    if db_lokasi is None:
-        raise HTTPException(status_code=404, detail="Lokasi not found")
-    
-    update_data = lokasi_update.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_lokasi, field, value)
-    
-    db.commit()
-    db.refresh(db_lokasi)
-    return db_lokasi
-
-
-@app.delete("/lokasi/{id_lokasi}", status_code=status.HTTP_204_NO_CONTENT, tags=["Lokasi"])
-def delete_lokasi(id_lokasi: int, db: Session = Depends(get_db)):
-    """Delete lokasi"""
-    db_lokasi = db.query(models.Lokasi).filter(models.Lokasi.id_lokasi == id_lokasi).first()
-    if db_lokasi is None:
-        raise HTTPException(status_code=404, detail="Lokasi not found")
-    
-    db.delete(db_lokasi)
-    db.commit()
-    return None
+# Log startup
+logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
 
 
 @app.get("/", tags=["Root"])
 def root():
-    """Root endpoint"""
+    """Root endpoint - API information"""
     return {
-        "message": "RSUD Sulfat Attendance System API",
-        "version": "2.0.0",
+        "message": settings.APP_NAME,
+        "version": settings.APP_VERSION,
         "database": "PostgreSQL",
         "docs": "/docs",
+        "api_v1": settings.API_V1_PREFIX,
         "endpoints": {
-            "lokasi": "/lokasi"
+            "lokasi": f"{settings.API_V1_PREFIX}/lokasi",
+            "health": "/health"
         }
+    }
+
+
+@app.get("/health", tags=["Health"])
+def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "version": settings.APP_VERSION,
+        "database": "PostgreSQL"
     }
